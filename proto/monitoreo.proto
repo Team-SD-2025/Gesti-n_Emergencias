@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package monitoreo;
+
+option go_package = "./proto";
+
+service MonitoreoService {
+  rpc RecibirActualizaciones(ActualizacionRequest) returns (stream ActualizacionReply);
+}
+
+message ActualizacionRequest {
+  string cliente_id = 1;
+}
+
+message ActualizacionReply {
+  string dron_id = 1;
+  string estado = 2;
+  string ubicacion = 3;
+  string timestamp = 4;
+}

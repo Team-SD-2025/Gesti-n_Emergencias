@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package drones;
+
+option go_package = "./proto";
+
+service DroneService {
+  rpc AtenderEmergencia (DroneRequest) returns (DroneReply);
+}
+
+message DroneRequest {
+  string dronId = 1;
+  string ubicacion = 2;
+  string tipoEmergencia = 3;
+  float latitud = 4;
+  float longitud = 5;
+  int32 magnitud = 6;
+}
+
+message DroneReply {
+  string estado = 1;
+}

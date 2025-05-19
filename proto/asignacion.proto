@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package asignacion;
+
+option go_package = "./proto";
+
+service AsignacionService {
+  rpc AsignarEmergencia (EmergenciaRequest) returns (EmergenciaReply);
+}
+
+message EmergenciaRequest {
+  string nombre = 1;
+  float latitud = 2;
+  float longitud = 3;
+  int32 magnitud = 4;
+}
+
+message EmergenciaReply {
+  string estado = 1;
+  string dronAsignado = 2;
+}
