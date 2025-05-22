@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Incendio Forestal Sur",
+    "latitude": 40,
+    "longitude": -10,
+    "magnitude": 5
+  },
+  {
+    "name": "Explosión en planta química",
+    "latitude": -20,
+    "longitude": 25,
+    "magnitude": 4
+  },
+  {
+    "name": "Incendio de edificio",
+    "latitude": 0,
+    "longitude": 0,
+    "magnitude": 3
+  },
+  {
+    "name": "Incendio de microbús",
+    "latitude": 30,
+    "longitude": 30,
+    "magnitude": 2
+  },
+  {
+    "name": "Incendio en supermercado",
+    "latitude": -35,
+    "longitude": -15,
+    "magnitude": 1
+  }
+]
