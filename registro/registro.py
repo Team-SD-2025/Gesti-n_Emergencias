@@ -3,8 +3,10 @@ import json
 from pymongo import MongoClient
 
 #Se conecta a RabbitMQ en la VM3
-rabbitmq_host = "10.10.28.37"  # IP VM3 
-connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_host))
+rabbitmq_host = "10.10.28.37"
+credentials = pika.PlainCredentials("registro", "registro123")
+parameters = pika.ConnectionParameters(host=rabbitmq_host, credentials=credentials)
+connection = pika.BlockingConnection(parameters)
 channel = connection.channel()
 
 channel.queue_declare(queue='registro', durable=True)

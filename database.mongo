@@ -1,0 +1,22 @@
+use emergencias
+
+db.drones.insertMany([
+  {
+    id: "dron01",
+    latitude: -10,
+    longitude: 20,
+    status: "available"
+  },
+  {
+    id: "dron02",
+    latitude: 0,
+    longitude: 0,
+    status: "available"
+  },
+  {
+    id: "dron03",
+    latitude: 25,
+    longitude: -15,
+    status: "available"
+  }
+])

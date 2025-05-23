@@ -1,13 +1,12 @@
 package main
 
-
 import (
-	"sync"
     "context"
     "fmt"
     "log"
     "math"
     "net"
+    "sync"
     "time"
 
     "Gestion_Emergencias/proto"
@@ -18,12 +17,10 @@ import (
     "go.mongodb.org/mongo-driver/mongo/options"
 )
 
-
-
 type asignacionServer struct {
     proto.UnimplementedAsignacionServiceServer
-    mongoClient *mongo.Client
-    mu          sync.Mutex
+    mongoClient  *mongo.Client
+    muEmergencia sync.Mutex
 }
 
 type Dron struct {
@@ -33,22 +30,29 @@ type Dron struct {
 }
 
 func (s *asignacionServer) AsignarEmergencia(ctx context.Context, req *proto.EmergenciaRequest) (*proto.EmergenciaReply, error) {
-
-	s.mu.Lock()
-    defer s.mu.Unlock()
+    s.muEmergencia.Lock()
+    defer s.muEmergencia.Unlock()
 
     log.Printf("Emergencia recibida: %s (%.4f, %.4f)", req.Nombre, req.Latitud, req.Longitud)
 
-    // Buscar dron más cercano desde MongoDB
     dron, err := s.buscarDronMasCercano(req.Latitud, req.Longitud)
     if err != nil {
         return nil, fmt.Errorf("error al buscar dron: %v", err)
     }
 
-    log.Printf("🚁 Dron asignado: %s", dron.ID)
+    // Marcar el dron como ocupado
+    _, err = s.mongoClient.Database("emergencias").Collection("drones").UpdateOne(
+        context.TODO(),
+        bson.M{"id": dron.ID},
+        bson.M{"$set": bson.M{"status": "ocupado"}},
+    )
+    if err != nil {
+        log.Printf("No se pudo marcar el dron como ocupado: %v", err)
+    }
 
-    // Conexión al dron (localhost:50052)
-    conn, err := grpc.Dial("localhost:50052", grpc.WithInsecure())
+    log.Printf("Dron asignado: %s", dron.ID)
+
+    conn, err := grpc.Dial("10.10.28.37:50052", grpc.WithInsecure())
     if err != nil {
         return nil, fmt.Errorf("error al conectar con el dron: %v", err)
     }
@@ -56,7 +60,6 @@ func (s *asignacionServer) AsignarEmergencia(ctx context.Context, req *proto.Eme
 
     droneClient := proto.NewDroneServiceClient(conn)
 
-    // Enviar emergencia
     dronReq := &proto.DroneRequest{
         DronId:         dron.ID,
         Ubicacion:      req.Nombre,
@@ -66,8 +69,11 @@ func (s *asignacionServer) AsignarEmergencia(ctx context.Context, req *proto.Eme
         Magnitud:       req.Magnitud,
     }
 
-    // Esperar respuesta del dron
-    droneResp, err := droneClient.AtenderEmergencia(ctx, dronReq)
+    // Contexto separado para esperar al dron sin depender del cliente
+    ctxDrone, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+    defer cancel()
+
+    droneResp, err := droneClient.AtenderEmergencia(ctxDrone, dronReq)
     if err != nil {
         return nil, fmt.Errorf("error en la respuesta del dron: %v", err)
     }
@@ -140,3 +146,4 @@ func main() {
         log.Fatalf("Error al iniciar servidor: %v", err)
     }
 }
+
