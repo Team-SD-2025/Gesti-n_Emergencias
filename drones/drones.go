@@ -31,7 +31,6 @@ type Dron struct {
     Longitud float32 `bson:"longitud"`
 }
 
-//Utilidad: distancia euclidiana
 func distancia(aLat, aLon, bLat, bLon float32) float64 {
     dx := float64(aLat - bLat)
     dy := float64(aLon - bLon)
@@ -41,23 +40,15 @@ func distancia(aLat, aLon, bLat, bLon float32) float64 {
 func (s *droneServer) AtenderEmergencia(ctx context.Context, req *proto.DroneRequest) (*proto.DroneReply, error) {
     log.Printf("Drone %s recibió emergencia: %s", req.DronId, req.Ubicacion)
 
-    //Obteniene la ubicación actual del dron
     col := s.mongoClient.Database("emergencias").Collection("drones")
     var dron Dron
     if err := col.FindOne(ctx, bson.M{"id": req.DronId}).Decode(&dron); err != nil {
         return nil, fmt.Errorf("no se pudo encontrar dron %s en MongoDB", req.DronId)
     }
 
-    //Calcula la distancia y tiempo de vuelo
     dist := distancia(dron.Latitud, dron.Longitud, req.Latitud, req.Longitud)
     vuelo := time.Duration(dist*0.5*1000) * time.Millisecond
     log.Printf("Dron %s volando %.2f unidades (~%.1fs)", dron.ID, dist, vuelo.Seconds())
-
-    time.Sleep(vuelo)
-
-	ch.QueueDeclare("registro", true, false, false, false, nil)
-	ch.QueueDeclare("monitoreo", true, false, false, false, nil)
-
 
     ch, err := s.rabbitConn.Channel()
     if err != nil {
@@ -65,6 +56,26 @@ func (s *droneServer) AtenderEmergencia(ctx context.Context, req *proto.DroneReq
     }
     defer ch.Close()
 
+    ch.QueueDeclare("registro", true, false, false, false, nil)
+    ch.QueueDeclare("monitoreo", true, false, false, false, nil)
+
+    // Enviar mensaje de inicio "En curso" inmediatamente
+    msgInicio := map[string]interface{}{
+        "dron_id":   dron.ID,
+        "estado":    "En curso",
+        "ubicacion": req.Ubicacion,
+        "timestamp": time.Now().Format(time.RFC3339),
+    }
+    bodyInicio, _ := json.Marshal(msgInicio)
+    ch.Publish("", "monitoreo", false, false, amqp.Publishing{
+        ContentType: "application/json",
+        Body:        bodyInicio,
+    })
+
+    // Iniciar vuelo
+    time.Sleep(vuelo)
+
+    // Enviar actualizaciones periódicas mientras apaga
     ticker := time.NewTicker(5 * time.Second)
     done := make(chan bool)
 
@@ -75,8 +86,8 @@ func (s *droneServer) AtenderEmergencia(ctx context.Context, req *proto.DroneReq
                 return
             case <-ticker.C:
                 msg := map[string]interface{}{
-                    "dron_id":  dron.ID,
-                    "estado":   "En curso",
+                    "dron_id":   dron.ID,
+                    "estado":    "Apagando",
                     "ubicacion": req.Ubicacion,
                     "timestamp": time.Now().Format(time.RFC3339),
                 }
@@ -90,15 +101,14 @@ func (s *droneServer) AtenderEmergencia(ctx context.Context, req *proto.DroneReq
         }
     }()
 
+    // Simular tiempo de apagado
     apagado := time.Duration(req.Magnitud*2) * time.Second
     log.Printf("Apagando fuego de magnitud %d (~%ds)...", req.Magnitud, apagado/time.Second)
     time.Sleep(apagado)
 
-
     ticker.Stop()
     done <- true
 
-    //Envia mensaje final a Registro
     final := map[string]interface{}{
         "dron_id":   dron.ID,
         "estado":    "Extinguido",
@@ -106,15 +116,27 @@ func (s *droneServer) AtenderEmergencia(ctx context.Context, req *proto.DroneReq
         "timestamp": time.Now().Format(time.RFC3339),
     }
     finalBody, _ := json.Marshal(final)
+
     ch.Publish("", "registro", false, false, amqp.Publishing{
         ContentType: "application/json",
         Body:        finalBody,
     })
-    log.Println("Emergencia extinguida. Estado enviado a Registro.")
+    ch.Publish("", "monitoreo", false, false, amqp.Publishing{
+        ContentType: "application/json",
+        Body:        finalBody,
+    })
+    log.Println("Emergencia extinguida. Estado enviado a Registro y Monitoreo.")
 
-    //Actualiza posición del dron 
-    _, err = col.UpdateOne(ctx, bson.M{"id": dron.ID}, bson.M{
-        "$set": bson.M{"latitud": req.Latitud, "longitud": req.Longitud},
+    // Actualiza ubicación y libera el dron
+    updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    _, err = col.UpdateOne(updateCtx, bson.M{"id": dron.ID}, bson.M{
+        "$set": bson.M{
+            "latitud": req.Latitud,
+            "longitud": req.Longitud,
+            "status":   "available",
+        },
     })
     if err != nil {
         log.Printf("No se pudo actualizar ubicación del dron en MongoDB: %v", err)
@@ -125,7 +147,6 @@ func (s *droneServer) AtenderEmergencia(ctx context.Context, req *proto.DroneReq
 
 func conectarMongo() *mongo.Client {
     client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI("mongodb://10.10.28.36:27017"))
-
     if err != nil {
         log.Fatalf("Error al conectar a MongoDB: %v", err)
     }
@@ -160,4 +181,3 @@ func main() {
         log.Fatalf("Error al iniciar servidor: %v", err)
     }
 }
-
