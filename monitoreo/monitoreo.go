@@ -1,102 +1,90 @@
 package main
 
 import (
-    "context"
+    
     "encoding/json"
     "fmt"
-    "io"
     "log"
-    "os"
-    "time"
+    "net"
 
     "Gestion_Emergencias/proto"
 
+    "github.com/streadway/amqp"
     "google.golang.org/grpc"
 )
 
-
-type Emergencia struct {
-    Name      string  json:"name"
-    Latitude  float32 json:"latitude"
-    Longitude float32 json:"longitude"
-    Magnitude int32   json:"magnitude"
+type monitoreoServer struct {
+    proto.UnimplementedMonitoreoServiceServer
 }
 
-func main() {
-    file, err := os.ReadFile("emergencias.json")
-    if err != nil {
-        log.Fatalf("No se pudo leer emergencias.json: %v", err)
-    }
+func (s *monitoreoServer) RecibirActualizaciones(req *proto.ActualizacionRequest, stream proto.MonitoreoService_RecibirActualizacionesServer) error {
+    log.Printf("Cliente %s conectado al monitoreo", req.ClienteId)
 
-    var emergencias []Emergencia
-    if err := json.Unmarshal(file, &emergencias); err != nil {
-        log.Fatalf("Error al parsear JSON: %v", err)
-    }
+    updates := escucharRabbitMQ() // canal exclusivo para este cliente
 
-    asignacionConn, err := grpc.Dial("10.10.28.36:50051", grpc.WithInsecure())
-    if err != nil {
-        log.Fatalf("No se pudo conectar a Asignación: %v", err)
-    }
-    defer asignacionConn.Close()
-    asignador := proto.NewAsignacionServiceClient(asignacionConn)
-
-    monitoreoConn, err := grpc.Dial("localhost:50053", grpc.WithInsecure())
-    if err != nil {
-        log.Fatalf("No se pudo conectar a Monitoreo: %v", err)
-    }
-    defer monitoreoConn.Close()
-    monitoreador := proto.NewMonitoreoServiceClient(monitoreoConn)
-
-    go escucharMonitoreo(monitoreador)
-
-    for i, e := range emergencias {
-        fmt.Printf("Enviando emergencia #%d: %s\n", i+1, e.Name)
-
-        req := &proto.EmergenciaRequest{
-            Nombre:    e.Name,
-            Latitud:   e.Latitude,
-            Longitud:  e.Longitude,
-            Magnitud:  e.Magnitude,
-        }
-
-        ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-        defer cancel()
-
-        resp, err := asignador.AsignarEmergencia(ctx, req)
-        if err != nil {
-            log.Printf("Error al enviar emergencia: %v\n", err)
+    for msg := range updates {
+        var data map[string]interface{}
+        if err := json.Unmarshal(msg, &data); err != nil {
             continue
         }
 
-        fmt.Printf("Asignada a dron %s (estado: %s)\n\n", resp.DronAsignado, resp.Estado)
+        resp := &proto.ActualizacionReply{
+            DronId:    data["dron_id"].(string),
+            Estado:    data["estado"].(string),
+            Ubicacion: data["ubicacion"].(string),
+            Timestamp: data["timestamp"].(string),
+        }
+
+        if err := stream.Send(resp); err != nil {
+            log.Printf("Error enviando al cliente: %v", err)
+            break
+        }
     }
 
-
-    fmt.Println("Esperando actualizaciones desde Monitoreo...")
-    time.Sleep(20 * time.Second)
+    return nil
 }
 
-func escucharMonitoreo(cliente proto.MonitoreoServiceClient) {
-    req := &proto.ActualizacionRequest{
-        ClienteId: "cliente-001",
-    }
-
-    stream, err := cliente.RecibirActualizaciones(context.Background(), req)
+func escucharRabbitMQ() <-chan []byte {
+    conn, err := amqp.Dial("amqp://monitoreo:monitoreo123@10.10.28.37:5672/") // IP de RabbitMQ (VM3)
     if err != nil {
-        log.Printf("Error al conectar con Monitoreo: %v", err)
-        return
+        log.Fatalf("No se pudo conectar a RabbitMQ: %v", err)
     }
 
-    for {
-        msg, err := stream.Recv()
-        if err == io.EOF {
-            break
-        }
-        if err != nil {
-            log.Printf("Error en stream: %v", err)
-            break
-        }
+    ch, err := conn.Channel()
+    if err != nil {
+        log.Fatalf("No se pudo abrir canal: %v", err)
+    }
 
-        fmt.Printf("[Monitoreo] Dron %s – %s en %s (%s)\n", msg.DronId, msg.Estado, msg.Ubicacion, msg.Timestamp)
+    ch.QueueDeclare("monitoreo", true, false, false, false, nil)
+
+    msgs, err := ch.Consume("monitoreo", "", true, false, false, false, nil)
+    if err != nil {
+        log.Fatalf("Error al consumir cola monitoreo: %v", err)
+    }
+
+    updates := make(chan []byte)
+
+    go func() {
+        for d := range msgs {
+            updates <- d.Body
+        }
+    }()
+
+    return updates
+}
+
+func main() {
+    lis, err := net.Listen("tcp", ":50053")
+    if err != nil {
+        log.Fatalf("No se pudo escuchar en el puerto 50053: %v", err)
+    }
+
+    grpcServer := grpc.NewServer()
+    proto.RegisterMonitoreoServiceServer(grpcServer, &monitoreoServer{})
+
+    fmt.Println("Servicio de Monitoreo escuchando en :50053")
+    if err := grpcServer.Serve(lis); err != nil {
+        log.Fatalf("Error al iniciar el servidor gRPC: %v", err)
     }
 }
+
