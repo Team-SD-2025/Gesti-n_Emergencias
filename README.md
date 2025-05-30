@@ -33,6 +33,8 @@ Para trabajar en el proyecto `Gestion_Emergencias`, primero debes conectarte a l
 
 ## Levantar el sistema (por máquina virtual)
 
+> **Nota**: Se asume que los servicios de **RabbitMQ** (en `10.10.28.37:5672`) y **MongoDB** ya están instalados y corriendo en sus respectivas máquinas virtuales. También se asume que las colas de RabbitMQ están creadas y configuradas correctamente, y que la base de datos contiene drones precargados desde `database.mongo`.
+
 ### 1. Monitoreo (`monitoreo.go`) – VM1
 
 ```bash
@@ -40,7 +42,7 @@ ssh nombre_cuenta_DI@ssh2.inf.utfsm.cl
 ssh ubuntu@10.10.28.35
 cd Gestion_Emergencias/monitoreo
 go run monitoreo.go
-```
+````
 
 ### 2. Asignación (`asignacion.go`) – VM2
 
@@ -53,9 +55,7 @@ go run asignacion.go
 
 ### 3. Registro (`registro.py`) – VM2
 
-Este servicio se conecta a la cola `registro` de RabbitMQ y almacena los estados.
-
-**Requiere entorno virtual de Python** ya creado previamente con `venv`, para facilitar la instalación de `pika`:
+Este servicio se conecta a la cola `registro` de RabbitMQ y guarda estados de drones.
 
 ```bash
 ssh nombre_cuenta_DI@ssh2.inf.utfsm.cl
@@ -65,20 +65,22 @@ source venv/bin/activate
 python3 registro.py
 ```
 
+> Se asume que el entorno virtual `venv/` ya fue creado y `pika` está instalado (`pip install pika`).
+
 ### 4. Drones (`drones.go`) – VM3
 
 ```bash
 ssh nombre_cuenta_DI@ssh2.inf.utfsm.cl
 ssh ubuntu@10.10.28.37
 cd Gestion_Emergencias/drones
-sudo service mongod start
-# RabbitMQ ya está corriendo por defecto en esta VM
+# MongoDB ya se encuentra corriendo en esta VM (no es necesario volver a ejecutar sudo service mongod start)
+# RabbitMQ también ya está activo en esta VM (localhost:5672)
 go run drones.go
 ```
 
 ### 5. Cliente (`cliente.go`) – VM1
 
-Este debe ejecutarse al final, una vez todos los demás servicios estén levantados:
+Debe ejecutarse **al final**, una vez todos los demás servicios estén levantados, ya que depende de ellos:
 
 ```bash
 ssh nombre_cuenta_DI@ssh2.inf.utfsm.cl
@@ -87,7 +89,7 @@ cd Gestion_Emergencias/cliente
 go run cliente.go
 ```
 
-> RabbitMQ ya se encuentra corriendo en la VM3 (`localhost:5672`) para el servicio de drones, y expuesto en `10.10.28.37:5672` para monitoreo y registro.
+
 
 
 ## Funcionamiento de la aplicación cliente
