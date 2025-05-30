@@ -19,7 +19,8 @@ Para trabajar en el proyecto `Gestion_Emergencias`, primero debes conectarte a l
    ```bash
    ssh nombre_cuenta_DI@ssh2.inf.utfsm.cl
    ```
-3. Una vez dentro del servidor `ssh2`, conéctate a la máquina correspondiente con la siguiente información:
+3. Ingresa tu contraseña de usuario cuando se te solicite.
+4. Una vez dentro del servidor `ssh2`, conéctate a la máquina correspondiente con la siguiente información:
 
 | Servicio   | IP          | Contraseña         | Máquina | VM  |
 | ---------- | ----------- | ------------------ | ------- | --- |
@@ -109,26 +110,34 @@ Al ejecutar `cliente.go`, el sistema:
 
 ```
 Gestion_Emergencias/
-├── asignacion/           # Servicio de asignación de drones
+├── asignacion/                 # Servicio de asignación de drones
 │   └── asignacion.go
-├── cliente/              # Aplicación cliente (CLI)
-│   └── cliente.go
-├── drones/               # Servicio de drones (simulación + monitoreo)
+├── cliente/                    # Aplicación cliente (CLI)
+│   ├── cliente.go
+│   └── emergencias.json        # Emergencias simuladas (5 ejemplos)
+├── drones/                     # Servicio de drones (simulación + monitoreo)
 │   └── drones.go
-├── monitoreo/            # Servicio de monitoreo vía RabbitMQ
+├── monitoreo/                  # Servicio de monitoreo vía RabbitMQ + gRPC
 │   └── monitoreo.go
-├── registro/             # Servicio de registro en Python
-│   └── registro.py
-│   └── venv/             # Entorno virtual Python (para pika)
-├── emergencias.json      # Emergencias simuladas
-├── proto/                # Definiciones .proto compiladas a Go
+├── proto/                      # Definiciones .proto y archivos generados por protoc
 │   ├── asignacion.proto
+│   ├── asignacion.pb.go
+│   ├── asignacion_grpc.pb.go
 │   ├── drones.proto
+│   ├── drones.pb.go
+│   ├── drones_grpc.pb.go
 │   ├── monitoreo.proto
-├── database.mongo        # Dump o archivo con drones precargados
-├── go.mod
-├── go.sum
+│   ├── monitoreo.pb.go
+│   └── monitoreo_grpc.pb.go
+├── registro/                   # Servicio de registro en Python
+│   ├── registro.py
+│   └── venv/                   # Entorno virtual Python (para pika)
+├── database.mongo              # Archivo con drones precargados
+├── go.mod                      # Archivo de dependencias de Go
+├── go.sum                      # Checksum de dependencias Go
+├── LICENSE
 └── README.md
+
 ```
 
 
