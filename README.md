@@ -103,7 +103,17 @@ Al ejecutar `cliente.go`, el sistema:
    Emergencia actual: Incendio Forestal Sur magnitud 5 en x = 40, y = -10
    Se ha asignado dron01 a la emergencia
    Dron en camino a emergencia...
+   Dron en camino a emergencia...
+   Dron en camino a emergencia...
+   .
+   .
+   .
    Dron apagando emergencia...
+   Dron apagando emergencia...
+   Dron apagando emergencia...
+   .
+   .
+   .
    Incendio Forestal Sur ha sido extinguido por dron01
    ```
 3. Cada mensaje refleja el estado del dron recibido mediante `monitoreo.go` vía RabbitMQ.
@@ -147,11 +157,11 @@ Gestion_Emergencias/
 
 * **RabbitMQ** usa un exchange `fanout` llamado `monitoreo_exchange` para distribuir actualizaciones.
 * **MongoDB** gestiona las ubicaciones de los drones y actualiza su estado.
-* **Asignación** publica el estado `Atendida` para que `registro.py` registre la emergencia desde el inicio.
 * **Cliente** muestra mensajes periódicos cada 3 segundos según el estado actual.
 * **cliente.go debe ejecutarse al final** para evitar errores por servicios aún no levantados.
+* Si se desea probar nuevamente el programa con otro archivo `emergencias.json` se deben ejecutar nuevamente todos los servicios.
 * Los datos se basan en coordenadas X/Y y distancias euclidianas.
-* Si ya ejecutaste `sudo service mongod start` anteriormente, no es necesario repetirlo, a menos que se haya reiniciado la VM.
+* Ya se ejecuto `sudo service mongod start` anteriormente, no es necesario repetirlo, a menos que se haya reiniciado la VM.
 
 
 ## Dependencias
