@@ -1,223 +1,214 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"log"
-	"math"
-	"net"
-	"time"
+    "context"
+    "encoding/json"
+    "fmt"
+    "log"
+    "math"
+    "net"
+    "time"
 
-	"Gestion_Emergencias/proto"
+    "Gestion_Emergencias/proto"
 
-	"github.com/streadway/amqp"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"google.golang.org/grpc"
+    "github.com/streadway/amqp"
+    "go.mongodb.org/mongo-driver/bson"
+    "go.mongodb.org/mongo-driver/mongo"
+    "go.mongodb.org/mongo-driver/mongo/options"
+    "google.golang.org/grpc"
 )
 
+// Parámetros de conexión y nombres de colas/exchanges usados
+const (
+    mongoURI     = "mongodb://10.10.28.36:27017"
+    rabbitURI    = "amqp://monitoreo:monitoreo123@10.10.28.36:5672/"
+    grpcPort     = ":50052"
+    registroCola = "registro"
+    monitoreoXch = "monitoreo_exchange"
+)
+
+// Estructura base para nuestro servidor de drones, donde guardamos las conexiones activas
 type droneServer struct {
-	proto.UnimplementedDroneServiceServer
-	mongoClient *mongo.Client
-	rabbitConn  *amqp.Connection
+    proto.UnimplementedDroneServiceServer
+    mongoClient *mongo.Client
+    rabbitConn  *amqp.Connection
 }
 
+// Este struct representa a un dron tal como está guardado en la base de datos
 type Dron struct {
-	ID       string  `bson:"id"`
-	Latitud  float32 `bson:"latitud"`
-	Longitud float32 `bson:"longitud"`
+    ID        string  `bson:"id"`
+    Latitude  float32 `bson:"latitude"`
+    Longitude float32 `bson:"longitude"`
 }
 
-// Calcula distancia Euclidiana entre dos coordenadas
+// Calcula la distancia en línea recta entre dos puntos usando pitágoras
 func distancia(aLat, aLon, bLat, bLon float32) float64 {
-	dx := float64(aLat - bLat)
-	dy := float64(aLon - bLon)
-	return math.Sqrt(dx*dx + dy*dy)
+    dx := float64(aLat - bLat)
+    dy := float64(aLon - bLon)
+    return math.Sqrt(dx*dx + dy*dy)
 }
 
-// Función principal del servicio: atender la emergencia asignada
+// Esta función publica un mensaje (en formato JSON) a RabbitMQ, ya sea a un exchange o a una cola específica
+func publicarEstado(ch *amqp.Channel, exchange, queue string, msg map[string]interface{}) {
+    body, _ := json.Marshal(msg)
+
+    if exchange != "" {
+        ch.Publish(exchange, "", false, false, amqp.Publishing{
+            ContentType: "application/json",
+            Body:        body,
+        })
+    }
+
+    if queue != "" {
+        ch.Publish("", queue, false, false, amqp.Publishing{
+            ContentType: "application/json",
+            Body:        body,
+        })
+    }
+}
+
+// Este método es el corazón del servidor de drones: se activa cuando se asigna una emergencia
 func (s *droneServer) AtenderEmergencia(ctx context.Context, req *proto.DroneRequest) (*proto.DroneReply, error) {
-	log.Printf("Drone %s recibió emergencia: %s", req.DronId, req.Ubicacion)
+    // Buscamos la información del dron en MongoDB
+    col := s.mongoClient.Database("emergencias").Collection("drones")
+    var dron Dron
+    if err := col.FindOne(ctx, bson.M{"id": req.DronId}).Decode(&dron); err != nil {
+        return nil, fmt.Errorf("no se pudo encontrar dron %s en MongoDB", req.DronId)
+    }
 
-	// Buscar la posición actual del dron en MongoDB
-	col := s.mongoClient.Database("emergencias").Collection("drones")
-	var dron Dron
-	if err := col.FindOne(ctx, bson.M{"id": req.DronId}).Decode(&dron); err != nil {
-		return nil, fmt.Errorf("no se pudo encontrar dron %s en MongoDB", req.DronId)
-	}
+    // Calculamos cuánto tardaría el dron en llegar al lugar de la emergencia
+    dist := distancia(dron.Latitude, dron.Longitude, req.Latitude, req.Longitude)
+    duracionVuelo := time.Duration(dist*0.5*1000) * time.Millisecond
 
-	// Calcular tiempo de vuelo (0.5s por unidad de distancia)
-	dist := distancia(dron.Latitud, dron.Longitud, req.Latitud, req.Longitud)
-	vuelo := time.Duration(dist*0.5*1000) * time.Millisecond
-	log.Printf("Dron %s volando %.2f unidades (~%.1fs)", dron.ID, dist, vuelo.Seconds())
+    log.Printf("Drone %s recibió emergencia: %s | Distancia: %.2f | Vuelo estimado: %.1f seg",
+        req.DronId, req.Ubicacion, dist, duracionVuelo.Seconds())
 
-	// Preparar conexión a RabbitMQ
-	ch, err := s.rabbitConn.Channel()
-	if err != nil {
-		return nil, fmt.Errorf("no se pudo abrir canal en RabbitMQ")
-	}
-	defer ch.Close()
+    // Nos conectamos a RabbitMQ para reportar el estado
+    ch, err := s.rabbitConn.Channel()
+    if err != nil {
+        return nil, fmt.Errorf("no se pudo abrir canal RabbitMQ")
+    }
+    defer ch.Close()
 
-	// Declarar cola para el registro y exchange para monitoreo
-	ch.QueueDeclare("registro", true, false, false, false, nil)
-	err = ch.ExchangeDeclare("monitoreo_exchange", "fanout", true, false, false, false, nil)
-	if err != nil {
-		return nil, fmt.Errorf("no se pudo declarar exchange de monitoreo")
-	}
+    // Aseguramos que las colas y exchange existan
+    ch.QueueDeclare(registroCola, true, false, false, false, nil)
+    ch.ExchangeDeclare(monitoreoXch, "fanout", true, false, false, false, nil)
 
-	time.Sleep(4 * time.Second) // Espera inicial
+    // Informamos que el dron fue asignado a una emergencia
+    publicarEstado(ch, monitoreoXch, "", map[string]interface{}{
+        "dron_id":   dron.ID,
+        "estado":    "Asignado",
+        "ubicacion": req.Ubicacion,
+        "timestamp": time.Now().Format(time.RFC3339),
+    })
 
-	// Enviar estado "Asignado" a monitoreo
-	msgAsignado := map[string]interface{}{
-		"dron_id":   dron.ID,
-		"estado":    "Asignado",
-		"ubicacion": req.Ubicacion,
-		"timestamp": time.Now().Format(time.RFC3339),
-	}
-	bodyAsignado, _ := json.Marshal(msgAsignado)
-	ch.Publish("monitoreo_exchange", "", false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Body:        bodyAsignado,
-	})
-	log.Println("Estado 'Asignado' enviado a monitoreo.")
+    // Estado inicial: dron en camino
+    publicarEstado(ch, monitoreoXch, "", map[string]interface{}{
+        "dron_id":   dron.ID,
+        "estado":    "En curso",
+        "ubicacion": req.Ubicacion,
+        "timestamp": time.Now().Format(time.RFC3339),
+    })
 
-	// Enviar estado "En curso"
-	msgInicio := map[string]interface{}{
-		"dron_id":   dron.ID,
-		"estado":    "En curso",
-		"ubicacion": req.Ubicacion,
-		"timestamp": time.Now().Format(time.RFC3339),
-	}
-	bodyInicio, _ := json.Marshal(msgInicio)
-	ch.Publish("monitoreo_exchange", "", false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Body:        bodyInicio,
-	})
-	log.Println("Estado 'En curso' enviado a monitoreo.")
+    // Simulamos el vuelo del dron hasta la emergencia
+    time.Sleep(duracionVuelo)
 
-	time.Sleep(vuelo) // Simula vuelo del dron
+    // Llegó: comenzamos el apagado
+    publicarEstado(ch, monitoreoXch, "", map[string]interface{}{
+        "dron_id":   dron.ID,
+        "estado":    "Apagando",
+        "ubicacion": req.Ubicacion,
+        "timestamp": time.Now().Format(time.RFC3339),
+    })
 
-	// Enviar primer estado "Apagando"
-	msgApagando := map[string]interface{}{
-		"dron_id":   dron.ID,
-		"estado":    "Apagando",
-		"ubicacion": req.Ubicacion,
-		"timestamp": time.Now().Format(time.RFC3339),
-	}
-	bodyApagando, _ := json.Marshal(msgApagando)
-	ch.Publish("monitoreo_exchange", "", false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Body:        bodyApagando,
-	})
-	log.Println("Enviada actualización inicial 'Apagando' a monitoreo.")
+    // Enviamos actualizaciones de estado "Apagando" cada 5 segundos
+    ticker := time.NewTicker(5 * time.Second)
+    done := make(chan bool)
+    go func() {
+        for {
+            select {
+            case <-done:
+                return
+            case <-ticker.C:
+                publicarEstado(ch, monitoreoXch, "", map[string]interface{}{
+                    "dron_id":   dron.ID,
+                    "estado":    "Apagando",
+                    "ubicacion": req.Ubicacion,
+                    "timestamp": time.Now().Format(time.RFC3339),
+                })
+            }
+        }
+    }()
 
-	// Envíos periódicos "Apagando" cada 5 segundos
-	ticker := time.NewTicker(5 * time.Second)
-	done := make(chan bool)
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				msg := map[string]interface{}{
-					"dron_id":   dron.ID,
-					"estado":    "Apagando",
-					"ubicacion": req.Ubicacion,
-					"timestamp": time.Now().Format(time.RFC3339),
-				}
-				body, _ := json.Marshal(msg)
-				ch.Publish("monitoreo_exchange", "", false, false, amqp.Publishing{
-					ContentType: "application/json",
-					Body:        body,
-				})
-				log.Println("Enviada actualización 'Apagando' a monitoreo.")
-			}
-		}
-	}()
+    // Simulamos el tiempo que se demora en extinguir el fuego (depende de la magnitud)
+    time.Sleep(time.Duration(req.Magnitud*2) * time.Second)
+    ticker.Stop()
+    done <- true
 
-	// Simula el tiempo de apagado (2s por unidad de magnitud)
-	apagado := time.Duration(req.Magnitud*2) * time.Second
-	log.Printf("Apagando fuego de magnitud %d (~%ds)...", req.Magnitud, apagado/time.Second)
-	time.Sleep(apagado)
+    // Finalmente, reportamos que la emergencia ha sido apagada
+    finalMsg := map[string]interface{}{
+        "dron_id":   dron.ID,
+        "estado":    "Extinguido",
+        "ubicacion": req.Ubicacion,
+        "timestamp": time.Now().Format(time.RFC3339),
+    }
+    publicarEstado(ch, monitoreoXch, "", finalMsg)
+    publicarEstado(ch, "", registroCola, finalMsg)
+    log.Println("Emergencia extinguida. Estado enviado a Registro y Monitoreo.")
 
-	// Detiene actualizaciones periódicas
-	ticker.Stop()
-	done <- true
+    // Actualizamos la posición final del dron y lo marcamos como disponible
+    updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    _, err = col.UpdateOne(updateCtx, bson.M{"id": dron.ID}, bson.M{
+        "$set": bson.M{
+            "latitude":  req.Latitude,
+            "longitude": req.Longitude,
+            "status":    "available",
+        },
+    })
+    if err != nil {
+        log.Printf("No se pudo actualizar ubicación del dron en MongoDB: %v", err)
+    }
 
-	// Enviar estado final "Extinguido" a monitoreo y registro
-	final := map[string]interface{}{
-		"dron_id":   dron.ID,
-		"estado":    "Extinguido",
-		"ubicacion": req.Ubicacion,
-		"timestamp": time.Now().Format(time.RFC3339),
-	}
-	finalBody, _ := json.Marshal(final)
-	ch.Publish("", "registro", false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Body:        finalBody,
-	})
-	ch.Publish("monitoreo_exchange", "", false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Body:        finalBody,
-	})
-	log.Println("Emergencia extinguida. Estado enviado a Registro y Monitoreo.")
-
-	// Actualizar posición del dron en MongoDB
-	updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err = col.UpdateOne(updateCtx, bson.M{"id": dron.ID}, bson.M{
-		"$set": bson.M{
-			"latitud":  req.Latitud,
-			"longitud": req.Longitud,
-			"status":   "available",
-		},
-	})
-	if err != nil {
-		log.Printf("No se pudo actualizar ubicación del dron en MongoDB: %v", err)
-	}
-
-	return &proto.DroneReply{Estado: "Extinguido"}, nil
+    return &proto.DroneReply{Estado: "Extinguido"}, nil
 }
 
-// Conecta a MongoDB
+// Abre conexión a MongoDB
 func conectarMongo() *mongo.Client {
-	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI("mongodb://10.10.28.36:27017"))
-	if err != nil {
-		log.Fatalf("Error al conectar a MongoDB: %v", err)
-	}
-	return client
+    client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
+    if err != nil {
+        log.Fatalf("Error al conectar a MongoDB: %v", err)
+    }
+    return client
 }
 
-// Conecta a RabbitMQ
+// Abre conexión a RabbitMQ
 func conectarRabbit() *amqp.Connection {
-	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
-	if err != nil {
-		log.Fatalf("Error al conectar a RabbitMQ: %v", err)
-	}
-	return conn
+    conn, err := amqp.Dial(rabbitURI)
+    if err != nil {
+        log.Fatalf("Error al conectar a RabbitMQ: %v", err)
+    }
+    return conn
 }
 
-// Inicializa el servidor gRPC de drones
+// Punto de entrada del servidor: configura conexiones y lanza el servicio gRPC
 func main() {
-	lis, err := net.Listen("tcp", ":50052")
-	if err != nil {
-		log.Fatalf("Error al escuchar en :50052: %v", err)
-	}
+    lis, err := net.Listen("tcp", grpcPort)
+    if err != nil {
+        log.Fatalf("Error al escuchar en %s: %v", grpcPort, err)
+    }
 
-	mongoClient := conectarMongo()
-	rabbitConn := conectarRabbit()
+    mongoClient := conectarMongo()
+    rabbitConn := conectarRabbit()
 
-	grpcServer := grpc.NewServer()
-	proto.RegisterDroneServiceServer(grpcServer, &droneServer{
-		mongoClient: mongoClient,
-		rabbitConn:  rabbitConn,
-	})
+    grpcServer := grpc.NewServer()
+    proto.RegisterDroneServiceServer(grpcServer, &droneServer{
+        mongoClient: mongoClient,
+        rabbitConn:  rabbitConn,
+    })
 
-	fmt.Println("Servidor de Drones escuchando en :50052")
-	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("Error al iniciar servidor: %v", err)
-	}
+    fmt.Printf("Servidor de Drones escuchando en %s\n", grpcPort)
+    if err := grpcServer.Serve(lis); err != nil {
+        log.Fatalf("Error al iniciar servidor: %v", err)
+    }
 }

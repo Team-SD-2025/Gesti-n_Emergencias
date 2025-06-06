@@ -10,8 +10,8 @@ service AsignacionService {
 
 message EmergenciaRequest {
   string nombre = 1;
-  float latitud = 2;
-  float longitud = 3;
+  float latitude = 2;
+  float longitude = 3;
   int32 magnitud = 4;
 }
 

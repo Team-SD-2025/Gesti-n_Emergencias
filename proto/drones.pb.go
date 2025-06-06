@@ -26,8 +26,8 @@ type DroneRequest struct {
 	DronId         string                 `protobuf:"bytes,1,opt,name=dronId,proto3" json:"dronId,omitempty"`
 	Ubicacion      string                 `protobuf:"bytes,2,opt,name=ubicacion,proto3" json:"ubicacion,omitempty"`
 	TipoEmergencia string                 `protobuf:"bytes,3,opt,name=tipoEmergencia,proto3" json:"tipoEmergencia,omitempty"`
-	Latitud        float32                `protobuf:"fixed32,4,opt,name=latitud,proto3" json:"latitud,omitempty"`
-	Longitud       float32                `protobuf:"fixed32,5,opt,name=longitud,proto3" json:"longitud,omitempty"`
+	Latitude       float32                `protobuf:"fixed32,4,opt,name=latitude,proto3" json:"latitude,omitempty"`
+	Longitude      float32                `protobuf:"fixed32,5,opt,name=longitude,proto3" json:"longitude,omitempty"`
 	Magnitud       int32                  `protobuf:"varint,6,opt,name=magnitud,proto3" json:"magnitud,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -84,16 +84,16 @@ func (x *DroneRequest) GetTipoEmergencia() string {
 	return ""
 }
 
-func (x *DroneRequest) GetLatitud() float32 {
+func (x *DroneRequest) GetLatitude() float32 {
 	if x != nil {
-		return x.Latitud
+		return x.Latitude
 	}
 	return 0
 }
 
-func (x *DroneRequest) GetLongitud() float32 {
+func (x *DroneRequest) GetLongitude() float32 {
 	if x != nil {
-		return x.Longitud
+		return x.Longitude
 	}
 	return 0
 }
@@ -153,13 +153,13 @@ var File_proto_drones_proto protoreflect.FileDescriptor
 
 const file_proto_drones_proto_rawDesc = "" +
 	"\n" +
-	"\x12proto/drones.proto\x12\x06drones\"\xbe\x01\n" +
+	"\x12proto/drones.proto\x12\x06drones\"\xc2\x01\n" +
 	"\fDroneRequest\x12\x16\n" +
 	"\x06dronId\x18\x01 \x01(\tR\x06dronId\x12\x1c\n" +
 	"\tubicacion\x18\x02 \x01(\tR\tubicacion\x12&\n" +
-	"\x0etipoEmergencia\x18\x03 \x01(\tR\x0etipoEmergencia\x12\x18\n" +
-	"\alatitud\x18\x04 \x01(\x02R\alatitud\x12\x1a\n" +
-	"\blongitud\x18\x05 \x01(\x02R\blongitud\x12\x1a\n" +
+	"\x0etipoEmergencia\x18\x03 \x01(\tR\x0etipoEmergencia\x12\x1a\n" +
+	"\blatitude\x18\x04 \x01(\x02R\blatitude\x12\x1c\n" +
+	"\tlongitude\x18\x05 \x01(\x02R\tlongitude\x12\x1a\n" +
 	"\bmagnitud\x18\x06 \x01(\x05R\bmagnitud\"$\n" +
 	"\n" +
 	"DroneReply\x12\x16\n" +

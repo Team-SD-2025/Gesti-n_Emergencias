@@ -1,203 +1,215 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"log"
-	"math"
-	"net"
-	"sync"
-	"time"
+    "context"
+    "encoding/json"
+    "fmt"
+    "log"
+    "math"
+    "net"
+    "sync"
+    "time"
 
-	"Gestion_Emergencias/proto"
-	"encoding/json"
+    "github.com/streadway/amqp"
+    "go.mongodb.org/mongo-driver/bson"
+    "go.mongodb.org/mongo-driver/mongo"
+    "go.mongodb.org/mongo-driver/mongo/options"
+    "google.golang.org/grpc"
 
-	"github.com/streadway/amqp"
-
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"google.golang.org/grpc"
+    "Gestion_Emergencias/proto"
 )
 
-// Estructura del servidor de asignación
+// Conexiones necesarias y constantes de configuración del sistema
+const (
+    mongoURI   = "mongodb://localhost:27017"
+    rabbitURI  = "amqp://monitoreo:monitoreo123@10.10.28.36:5672/"
+    droneGRPC  = "10.10.28.37:50052" // IP del servidor de drones
+    rabbitCola = "registro"          // Cola donde se registran eventos de emergencias
+)
+
+// Servidor gRPC que maneja asignación de drones
 type asignacionServer struct {
-	proto.UnimplementedAsignacionServiceServer
-	mongoClient  *mongo.Client
-	muEmergencia sync.Mutex // Mutex para evitar asignaciones simultáneas
+    proto.UnimplementedAsignacionServiceServer
+    mongoClient  *mongo.Client     // conexión a MongoDB
+    muEmergencia sync.Mutex        // mutex para evitar que dos emergencias se procesen al mismo tiempo
 }
 
-// Estructura que representa un dron en MongoDB
+// Estructura que representa un dron guardado en la base de datos
 type Dron struct {
-	ID       string  `bson:"id"`
-	Latitud  float32 `bson:"latitud"`
-	Longitud float32 `bson:"longitud"`
+    ID        string  `bson:"id"`
+    Latitude  float32 `bson:"latitude"`
+    Longitude float32 `bson:"longitude"`
+    Status    string  `bson:"status"`
 }
 
-// Método gRPC que maneja la asignación de emergencias
+// Esta función se llama cuando llega una nueva emergencia.
+// Su objetivo es buscar el dron más cercano y coordinar su activación.
 func (s *asignacionServer) AsignarEmergencia(ctx context.Context, req *proto.EmergenciaRequest) (*proto.EmergenciaReply, error) {
-	// Evita que dos emergencias se asignen al mismo tiempo
-	s.muEmergencia.Lock()
-	defer s.muEmergencia.Unlock()
+    s.muEmergencia.Lock()
+    defer s.muEmergencia.Unlock()
 
-	log.Printf("Emergencia recibida: %s (%.4f, %.4f)", req.Nombre, req.Latitud, req.Longitud)
+    log.Printf("Emergencia recibida: %s (%.2f, %.2f)", req.Nombre, req.Latitude, req.Longitude)
 
-	// Buscar el dron más cercano a la ubicación de la emergencia
-	dron, err := s.buscarDronMasCercano(req.Latitud, req.Longitud)
-	if err != nil {
-		return nil, fmt.Errorf("error al buscar dron: %v", err)
-	}
+    // Buscamos qué dron está más cerca y disponible
+    dron, err := s.buscarDronMasCercano(req.Latitude, req.Longitude)
+    if err != nil {
+        return nil, fmt.Errorf("error al buscar dron: %v", err)
+    }
 
-	// Marcar el dron como "ocupado" en MongoDB
-	_, err = s.mongoClient.Database("emergencias").Collection("drones").UpdateOne(
-		context.TODO(),
-		bson.M{"id": dron.ID},
-		bson.M{"$set": bson.M{"status": "ocupado"}},
-	)
-	if err != nil {
-		log.Printf("No se pudo marcar el dron como ocupado: %v", err)
-	}
+    // Marcamos el dron como ocupado en la base de datos
+    _, err = s.mongoClient.Database("emergencias").Collection("drones").UpdateOne(
+        context.Background(),
+        bson.M{"id": dron.ID},
+        bson.M{"$set": bson.M{"status": "ocupado"}},
+    )
+    if err != nil {
+        log.Printf("No se pudo marcar el dron como ocupado: %v", err)
+    }
 
-	log.Printf("Dron asignado: %s", dron.ID)
+    log.Printf("Dron asignado: %s", dron.ID)
 
-	// Enviar mensaje de estado "Atendida" al servicio de registro vía RabbitMQ
-	go func() {
-		conn, err := amqp.Dial("amqp://monitoreo:monitoreo123@10.10.28.37:5672/")
-		if err != nil {
-			log.Printf("Error al conectar a RabbitMQ: %v", err)
-			return
-		}
-		defer conn.Close()
+    // Publicamos la emergencia en RabbitMQ para que se registre
+    go publicarEmergenciaRegistro(req)
 
-		ch, err := conn.Channel()
-		if err != nil {
-			log.Printf("Error al abrir canal RabbitMQ: %v", err)
-			return
-		}
-		defer ch.Close()
+    // Establecemos conexión gRPC con el servidor de drones
+    conn, err := grpc.Dial(droneGRPC, grpc.WithInsecure())
+    if err != nil {
+        return nil, fmt.Errorf("error al conectar con el dron: %v", err)
+    }
+    defer conn.Close()
 
-		// Asegura que la cola exista
-		ch.QueueDeclare("registro", true, false, false, false, nil)
+    // Le pedimos al dron que atienda la emergencia
+    droneClient := proto.NewDroneServiceClient(conn)
+    ctxDrone, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+    defer cancel()
 
-		// Crear mensaje JSON con estado "Atendida"
-		msg := map[string]interface{}{
-			"dron_id":   dron.ID,
-			"estado":    "Atendida",
-			"ubicacion": req.Nombre,
-			"timestamp": time.Now().Format(time.RFC3339),
-		}
+    droneResp, err := droneClient.AtenderEmergencia(ctxDrone, &proto.DroneRequest{
+        DronId:         dron.ID,
+        Ubicacion:      req.Nombre,
+        TipoEmergencia: req.Nombre,
+        Latitude:       req.Latitude,
+        Longitude:      req.Longitude,
+        Magnitud:       req.Magnitud,
+    })
+    if err != nil {
+        return nil, fmt.Errorf("error en la respuesta del dron: %v", err)
+    }
 
-		body, _ := json.Marshal(msg)
-		ch.Publish("", "registro", false, false, amqp.Publishing{
-			ContentType: "application/json",
-			Body:        body,
-		})
+    log.Printf("Emergencia finalizada por dron %s. Estado: %s", dron.ID, droneResp.Estado)
 
-		log.Printf("Estado 'Atendida' enviado a registro.")
-	}()
+    // Cuando termina, lo volvemos a marcar como disponible
+    _, err = s.mongoClient.Database("emergencias").Collection("drones").UpdateOne(
+        context.Background(),
+        bson.M{"id": dron.ID},
+        bson.M{"$set": bson.M{"status": "available"}},
+    )
 
-	// Llama al servicio del dron vía gRPC para que atienda la emergencia
-	conn, err := grpc.Dial("10.10.28.37:50052", grpc.WithInsecure())
-	if err != nil {
-		return nil, fmt.Errorf("error al conectar con el dron: %v", err)
-	}
-	defer conn.Close()
-
-	droneClient := proto.NewDroneServiceClient(conn)
-
-	// Construir el mensaje gRPC con los datos de la emergencia
-	dronReq := &proto.DroneRequest{
-		DronId:         dron.ID,
-		Ubicacion:      req.Nombre,
-		TipoEmergencia: req.Nombre,
-		Latitud:        req.Latitud,
-		Longitud:       req.Longitud,
-		Magnitud:       req.Magnitud,
-	}
-
-	// Establece timeout de 3 minutos para la acción del dron
-	ctxDrone, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	// Envía la emergencia al dron
-	droneResp, err := droneClient.AtenderEmergencia(ctxDrone, dronReq)
-	if err != nil {
-		return nil, fmt.Errorf("error en la respuesta del dron: %v", err)
-	}
-
-	log.Printf("Emergencia atendida por dron %s. Estado: %s", dron.ID, droneResp.Estado)
-
-	// Devuelve respuesta al cliente con el estado y el dron asignado
-	return &proto.EmergenciaReply{
-		Estado:       droneResp.Estado,
-		DronAsignado: dron.ID,
-	}, nil
+    return &proto.EmergenciaReply{
+        Estado:       droneResp.Estado,
+        DronAsignado: dron.ID,
+    }, nil
 }
 
-// busca el dron disponible más cercano a una ubicación (lat, lon)
-func (s *asignacionServer) buscarDronMasCercano(lat float32, lon float32) (*Dron, error) {
+// Esta función manda un mensaje con los detalles de la emergencia a la cola 'registro' en RabbitMQ.
+// Sirve para tener un historial centralizado de emergencias.
+func publicarEmergenciaRegistro(req *proto.EmergenciaRequest) {
+    conn, err := amqp.Dial(rabbitURI)
+    if err != nil {
+        log.Printf("Error al conectar a RabbitMQ (En curso): %v", err)
+        return
+    }
+    defer conn.Close()
 
-	// Busca drones disponibles
-	col := s.mongoClient.Database("emergencias").Collection("drones")
+    ch, err := conn.Channel()
+    if err != nil {
+        log.Printf("Error al abrir canal RabbitMQ: %v", err)
+        return
+    }
+    defer ch.Close()
 
-	cursor, err := col.Find(context.TODO(), bson.M{"status": "available"})
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(context.TODO())
+    ch.QueueDeclare(rabbitCola, true, false, false, false, nil)
 
-	var dronMasCercano *Dron
-	minDist := float64(9999999)
+    msg := map[string]interface{}{
+        "emergency_id": time.Now().UnixNano(), // usamos un ID basado en timestamp
+        "name":         req.Nombre,
+        "latitude":     req.Latitude,
+        "longitude":    req.Longitude,
+        "magnitude":    req.Magnitud,
+        "status":       "En curso",
+    }
 
-	// Recorre los drones y calcula distancia
-	for cursor.Next(context.TODO()) {
-		var d Dron
-		if err := cursor.Decode(&d); err != nil {
-			continue
-		}
-		dist := calcularDistancia(lat, lon, d.Latitud, d.Longitud)
-		if dist < minDist {
-			minDist = dist
-			dronMasCercano = &d
-		}
-	}
+    body, _ := json.Marshal(msg)
+    ch.Publish("", rabbitCola, false, false, amqp.Publishing{
+        ContentType: "application/json",
+        Body:        body,
+    })
 
-	if dronMasCercano == nil {
-		return nil, fmt.Errorf("no hay drones disponibles")
-	}
-	return dronMasCercano, nil
+    log.Printf("Emergencia enviada a registro (En curso): %s", req.Nombre)
 }
 
-// Calcula distancia euclídea entre dos puntos geográficos (plano)
-func calcularDistancia(lat1, lon1, lat2, lon2 float32) float64 {
-	dx := float64(lat2 - lat1)
-	dy := float64(lon2 - lon1)
-	return math.Sqrt(dx*dx + dy*dy)
+// Esta función busca entre todos los drones disponibles el que esté más cerca de la emergencia
+func (s *asignacionServer) buscarDronMasCercano(lat, lon float32) (*Dron, error) {
+    col := s.mongoClient.Database("emergencias").Collection("drones")
+    cursor, err := col.Find(context.Background(), bson.M{"status": "available"})
+    if err != nil {
+        return nil, err
+    }
+    defer cursor.Close(context.Background())
+
+    var mejor *Dron
+    min := float64(1e9) // empezamos con una distancia muy grande
+
+    for cursor.Next(context.Background()) {
+        var d Dron
+        if err := cursor.Decode(&d); err != nil {
+            continue
+        }
+        dist := calcularDistancia(d.Latitude, d.Longitude, lat, lon)
+        if dist < min {
+            min = dist
+            mejor = &d
+        }
+    }
+
+    if mejor == nil {
+        return nil, fmt.Errorf("no hay drones disponibles")
+    }
+
+    return mejor, nil
 }
 
-// Conexión básica a MongoDB local
+// Simple función para calcular la distancia entre dos puntos (como si fueran en un plano)
+func calcularDistancia(x1, y1, x2, y2 float32) float64 {
+    dx := float64(x1 - x2)
+    dy := float64(y1 - y2)
+    return math.Sqrt(dx*dx + dy*dy)
+}
+
+// Conecta el servidor con MongoDB
 func conectarMongo() *mongo.Client {
-	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI("mongodb://localhost:27017"))
-	if err != nil {
-		log.Fatalf("Error al conectar con MongoDB: %v", err)
-	}
-	return client
+    client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
+    if err != nil {
+        log.Fatalf("Error al conectar a MongoDB: %v", err)
+    }
+    return client
 }
 
-// Función main: levanta servidor gRPC en el puerto 50051
+// Esta es la función principal que inicia el servidor de asignación
 func main() {
-	lis, err := net.Listen("tcp", ":50051")
-	if err != nil {
-		log.Fatalf("No se pudo escuchar en :50051: %v", err)
-	}
+    lis, err := net.Listen("tcp", ":50051")
+    if err != nil {
+        log.Fatalf("No se pudo escuchar en :50051: %v", err)
+    }
 
-	grpcServer := grpc.NewServer()
-	mongoClient := conectarMongo()
+    mongoClient := conectarMongo()
 
-	proto.RegisterAsignacionServiceServer(grpcServer, &asignacionServer{mongoClient: mongoClient})
+    grpcServer := grpc.NewServer()
+    proto.RegisterAsignacionServiceServer(grpcServer, &asignacionServer{
+        mongoClient: mongoClient,
+    })
 
-	fmt.Println("Servidor de Asignación escuchando en :50051")
-	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("Error al iniciar servidor: %v", err)
-	}
+    fmt.Println("Servidor de Asignación escuchando en :50051")
+    if err := grpcServer.Serve(lis); err != nil {
+        log.Fatalf("Error al iniciar servidor: %v", err)
+    }
 }

@@ -12,8 +12,8 @@ message DroneRequest {
   string dronId = 1;
   string ubicacion = 2;
   string tipoEmergencia = 3;
-  float latitud = 4;
-  float longitud = 5;
+  float latitude = 4;
+  float longitude = 5;
   int32 magnitud = 6;
 }
 

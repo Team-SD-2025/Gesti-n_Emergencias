@@ -24,8 +24,8 @@ const (
 type EmergenciaRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Nombre        string                 `protobuf:"bytes,1,opt,name=nombre,proto3" json:"nombre,omitempty"`
-	Latitud       float32                `protobuf:"fixed32,2,opt,name=latitud,proto3" json:"latitud,omitempty"`
-	Longitud      float32                `protobuf:"fixed32,3,opt,name=longitud,proto3" json:"longitud,omitempty"`
+	Latitude      float32                `protobuf:"fixed32,2,opt,name=latitude,proto3" json:"latitude,omitempty"`
+	Longitude     float32                `protobuf:"fixed32,3,opt,name=longitude,proto3" json:"longitude,omitempty"`
 	Magnitud      int32                  `protobuf:"varint,4,opt,name=magnitud,proto3" json:"magnitud,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -68,16 +68,16 @@ func (x *EmergenciaRequest) GetNombre() string {
 	return ""
 }
 
-func (x *EmergenciaRequest) GetLatitud() float32 {
+func (x *EmergenciaRequest) GetLatitude() float32 {
 	if x != nil {
-		return x.Latitud
+		return x.Latitude
 	}
 	return 0
 }
 
-func (x *EmergenciaRequest) GetLongitud() float32 {
+func (x *EmergenciaRequest) GetLongitude() float32 {
 	if x != nil {
-		return x.Longitud
+		return x.Longitude
 	}
 	return 0
 }
@@ -146,11 +146,11 @@ var File_proto_asignacion_proto protoreflect.FileDescriptor
 const file_proto_asignacion_proto_rawDesc = "" +
 	"\n" +
 	"\x16proto/asignacion.proto\x12\n" +
-	"asignacion\"}\n" +
+	"asignacion\"\x81\x01\n" +
 	"\x11EmergenciaRequest\x12\x16\n" +
-	"\x06nombre\x18\x01 \x01(\tR\x06nombre\x12\x18\n" +
-	"\alatitud\x18\x02 \x01(\x02R\alatitud\x12\x1a\n" +
-	"\blongitud\x18\x03 \x01(\x02R\blongitud\x12\x1a\n" +
+	"\x06nombre\x18\x01 \x01(\tR\x06nombre\x12\x1a\n" +
+	"\blatitude\x18\x02 \x01(\x02R\blatitude\x12\x1c\n" +
+	"\tlongitude\x18\x03 \x01(\x02R\tlongitude\x12\x1a\n" +
 	"\bmagnitud\x18\x04 \x01(\x05R\bmagnitud\"M\n" +
 	"\x0fEmergenciaReply\x12\x16\n" +
 	"\x06estado\x18\x01 \x01(\tR\x06estado\x12\"\n" +
